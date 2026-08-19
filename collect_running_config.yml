@@ -1,0 +1,59 @@
+---
+- name: Collect running‑config from Cisco devices
+  hosts: all
+  gather_facts: false
+  collections:
+    - cisco.ios
+    - cisco.nxos
+    - cisco.asa
+    - ansible.netcommon
+
+  vars:
+    # Directory on the control node where the configs will be stored  
+    output_dir: configs
+
+  pre_tasks:
+    - name: Ensure output directory exists on the control node
+      delegate_to: localhost
+      file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Set the proper network_os for each group
+      set_fact:
+        ansible_network_os: >-
+          {% if inventory_hostname in groups['catalyst']   %}
+          ios
+          {% elif inventory_hostname in groups['nexus']   %}
+          nxos
+          {% elif inventory_hostname in groups['firepower'] %}
+          cisco.asa
+          {% else %}
+          ios
+          {% endif %}
+
+  tasks:
+    - name: Run show running‑config on IOS devices
+      when: ansible_network_os == "ios"
+      ios_command:
+        commands: show running-config
+      register: cfg_output
+
+    - name: Run show running‑config on NX‑OS devices
+      when: ansible_network_os == "nxos"
+      nxos_command:
+        commands: show running-config
+      register: cfg_output
+
+    - name: Run show running‑config on ASA/Firepower devices
+      when: ansible_network_os == "cisco.asa"
+      asa_command:
+        commands: show running-config
+      register: cfg_output
+
+    - name: Save the running‑config to a text file on the control node
+      delegate_to: localhost
+      copy:
+        content: "{{ cfg_output.stdout[0] }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}_run.txt"

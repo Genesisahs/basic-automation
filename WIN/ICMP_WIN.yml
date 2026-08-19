@@ -1,0 +1,8 @@
+---
+- name: Ping Windows 10 host using win_ping
+  hosts: windows
+  gather_facts: no
+
+  tasks:
+    - name: Test WinRM connection with win_ping
+      win_ping:

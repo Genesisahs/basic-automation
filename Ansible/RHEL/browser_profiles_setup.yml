@@ -1,0 +1,44 @@
+---
+- name: Update Firefox and Chrome desktop launchers to use wrapper scripts
+  hosts: all
+  become: yes
+  vars_files:
+    - vault.yml
+  vars:
+    firefox_wrapper_path: /usr/local/bin/firefox-custom
+    chrome_wrapper_path: /usr/local/bin/google-chrome-custom
+
+  tasks:
+    - name: Find Firefox desktop entry files
+      find:
+        paths:
+          - /usr/share/applications
+          - "{{ ansible_env.HOME }}/.local/share/applications"
+        patterns: 'firefox*.desktop'
+        recurse: yes
+      register: firefox_desktop_files
+
+    - name: Update Firefox desktop launcher Exec lines to use wrapper
+      lineinfile:
+        path: "{{ item.path }}"
+        regexp: '^Exec=firefox(\s|$)'
+        line: 'Exec={{ firefox_wrapper_path }} %u'
+      loop: "{{ firefox_desktop_files.files }}"
+      when: firefox_desktop_files.matched > 0
+
+    - name: Find Chrome desktop entry files
+      find:
+        paths:
+          - /usr/share/applications
+          - "{{ ansible_env.HOME }}/.local/share/applications"
+        patterns: 'google-chrome*.desktop'
+        recurse: yes
+      register: chrome_desktop_files
+
+    - name: Update Chrome desktop launcher Exec lines to use wrapper
+      lineinfile:
+        path: "{{ item.path }}"
+        regexp: '^Exec=.*google-chrome.*'
+        line: 'Exec={{ chrome_wrapper_path }} %U'
+      loop: "{{ chrome_desktop_files.files }}"
+      when: chrome_desktop_files.matched > 0

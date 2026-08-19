@@ -1,0 +1,100 @@
+- name: Build RHEL8 and RHEL9 inventory from multiple HSV folders using vaulted passwords
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - vault.yml
+  vars:
+    target_folders:
+      - "/HSV/vm/_Deployments/RHEL-8-INFRA"
+      - "/HSV/vm/_Deployments/RHEL-8-DEV"
+      - "/HSV/vm/_Deployments/RHEL-8-USER"
+      - "/HSV/vm/_Deployments/RHEL-8-DEV-GHS"
+      - "/HSV/vm/_Deployments/RHEL-8-BSP-DEV"
+      - "/HSV/vm/_Deployments/RHEL-8-DEV-GPU"
+      - "/HSV/vm/_Deployments/RHEL-9-DEV"
+      - "/HSV/vm/_Deployments/RHEL-9-USER"
+
+
+
+  tasks:
+    - name: Gather VMs from each target folder
+      community.vmware.vmware_vm_info:
+        hostname: "{{ vsphere_hostname }}"
+        username: "{{ vsphere_username }}"
+        password: "{{ vsphere_password }}"
+        validate_certs: false
+        folder: "{{ item }}"
+        show_attribute: true
+        show_net: true
+        show_folder: true
+        show_datacenter: true
+        show_resource_pool: true
+      loop: "{{ target_folders }}"
+      register: vm_info_results
+
+    - name: Combine all gathered VM lists into one
+      set_fact:
+        all_vms: "{{ vm_info_results.results | map(attribute='virtual_machines') | sum(start=[]) }}"
+
+    - name: Build normalized VM list filtered by datacenter HSV and with IP
+      set_fact:
+        normalized_vms: >-
+          {%- set out = [] -%}
+          {%- for vm in all_vms | default([]) -%}
+            {%- if vm.datacenter is defined and vm.datacenter == 'HSV' and vm.ip_address | default('') != '' -%}
+              {%- set dns = '' -%}
+              {%- if vm.summary is defined and vm.summary.guest is defined and vm.summary.guest.hostName is defined -%}
+                {%- set dns = vm.summary.guest.hostName -%}
+              {%- elif vm.guest is defined and vm.guest.hostName is defined -%}
+                {%- set dns = vm.guest.hostName -%}
+              {%- elif vm.attributes is defined and vm.attributes is iterable -%}
+                {%- for attr in vm.attributes -%}
+                  {%- if attr.key is defined and attr.key == 'dnsName' -%}
+                    {%- set dns = attr.value -%}
+                  {%- endif -%}
+                {%- endfor -%}
+              {%- endif -%}
+              {%- if dns == '' -%}
+                {%- set dns = vm.name | default('') -%}
+              {%- endif -%}
+              {%- set _ = out.append({
+                'dns': dns,
+                'ip': vm.ip_address,
+                'guest_name': vm.guest_name | default(''),
+                'vm_name': vm.name | default('')
+              }) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Show all normalized VMs with IPs
+      debug:
+        var: normalized_vms
+
+    - name: Generate timestamp (YYYYMMDD-HHMM)
+      set_fact:
+        utc_time: "{{ lookup('pipe', 'date -u +%Y%m%d-%H%M') }}"
+
+    - name: Write inventory file with vaulted passwords referenced
+      copy:
+        dest: "host-RHEL8-{{ utc_time }}.yml"
+        content: |
+          ---
+          all:
+            children:
+              your_hosts:
+                hosts:
+          {% for vm in normalized_vms %}
+                  {{ vm.guest_name | default(vm.vm_name) }}:
+                    ansible_ssh_host: {{ vm.ip }}
+                    ansible_user: {{ ansible_user }}
+                    ansible_ssh_pass: "{{ '{{ ansible_ssh_pass }}' }}"
+                    ansible_become: yes
+                    ansible_become_method: sudo
+                    ansible_become_pass: "{{ '{{ ansible_become_pass }}' }}"
+          {% endfor %}
+      delegate_to: localhost
+
+    - name: Done
+      debug:
+        msg: "Created host-RHEL8-{{ utc_time }}.yml"

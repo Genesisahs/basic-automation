@@ -1,0 +1,56 @@
+---
+- name: Configure proxy and certificates on RHEL 8
+  hosts: all
+  become: yes
+
+  vars:
+    proxy_user: "p06931"
+    # Escape sensitive characters; if password contains !, wrap in single quotes in env file
+    proxy_password: "!QAZ2wsxM0nst3rHunt3r!994"
+    proxy_host: "contractorproxy.ms.northgrum.com"
+    proxy_port: 80
+
+    http_proxy_url: "http://{{ proxy_user }}:{{ proxy_password | regex_replace('(!)', '\\\\!') }}@{{ proxy_host }}:{{ proxy_port }}/"
+    no_proxy_list: ".c2.net,.c2.dev,.c2.lab,.swi.lab,.northgrum.com,.ngc.com,.myngc.com,.ngisn.com,10.0.0.0/8,localhost,127.0.0.0/8,192.168.0.0/16,::1"
+
+    # Local path on control node to your CA cert (adjust accordingly)
+    local_ca_cert_path: "./files/NorthropGrummanMPCA-07.crt"
+
+  tasks:
+    - name: Set system-wide proxy environment variables in /etc/environment
+      lineinfile:
+        path: /etc/environment
+        state: present
+        regexp: '^{{ item.key }}='
+        line: '{{ item.key }}="{{ item.value }}"'
+        backrefs: yes
+      loop:
+        - { key: HTTP_PROXY,  value: "{{ http_proxy_url }}" }
+        - { key: HTTPS_PROXY, value: "{{ http_proxy_url }}" }
+        - { key: FTP_PROXY,   value: "{{ http_proxy_url }}" }
+        - { key: NO_PROXY,    value: "{{ no_proxy_list }}" }
+        - { key: http_proxy,  value: "{{ http_proxy_url }}" }
+        - { key: https_proxy, value: "{{ http_proxy_url }}" }
+        - { key: ftp_proxy,   value: "{{ http_proxy_url }}" }
+        - { key: no_proxy,    value: "{{ no_proxy_list }}" }
+
+    - name: Copy internal CA certificate to system trust anchors
+      copy:
+        src: "{{ local_ca_cert_path }}"
+        dest: /etc/pki/ca-trust/source/anchors/NorthropGrummanMPCA-07.crt
+        owner: root
+        group: root
+        mode: 0644
+
+    - name: Update system CA trust
+      command: update-ca-trust extract
+      args:
+        creates: /etc/pki/tls/certs/ca-bundle.crt
+
+    - name: Configure git credential cache for all users (optional)
+      ini_file:
+        path: /etc/gitconfig
+        section: credential
+        option: helper
+        value: cache
+

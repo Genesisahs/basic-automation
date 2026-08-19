@@ -1,0 +1,80 @@
+---
+- name: Mount SMB share with Kerberos and add GUI bookmark
+  hosts: your_hosts
+  become: yes
+  vars:
+    kinit_username: "zzp06931"
+    kinit_password: "{{ kinit_password }}"     # Securely passed via Jenkins or Vault
+    mount_point: "/mnt/AdminShare"
+    smb_share: "//infra-01.c2.dev/Admin-Share$"
+  tasks:
+    - name: Install required packages
+      dnf:
+        name:
+          - cifs-utils
+          - krb5-workstation
+          - expect
+        state: present
+        update_cache: yes
+
+    - name: Obtain Kerberos ticket with expect
+      expect:
+        command: "kinit {{ kinit_username }}"
+        responses:
+          Password: "{{ kinit_password }}"
+      no_log: true
+
+    - name: Get UID of ansible_user
+      shell: "id -u {{ ansible_user }}"
+      register: ansible_uid_raw
+      changed_when: false
+
+    - name: Get primary group name of ansible_user
+      shell: "id -gn {{ ansible_user }}"
+      register: user_primary_group
+      changed_when: false
+
+    - set_fact:
+        ansible_uid: "{{ ansible_uid_raw.stdout }}"
+        ansible_group: "{{ user_primary_group.stdout }}"
+
+    - name: Ensure mount point directory exists
+      file:
+        path: "{{ mount_point }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_group }}"
+        mode: '0755'
+
+    - name: Mount SMB share with Kerberos security
+      mount:
+        path: "{{ mount_point }}"
+        src: "{{ smb_share }}"
+        fstype: cifs
+        opts: "sec=krb5,uid={{ ansible_uid }},gid={{ ansible_group }}"
+        state: mounted
+
+    - name: Confirm mount is successful
+      shell: mount | grep "{{ mount_point }}"
+      register: mount_check
+      changed_when: false
+      failed_when: mount_check.rc != 0
+
+    - debug:
+        msg: "Mount check output: {{ mount_check.stdout }}"
+
+    - name: Add GTK bookmark for SMB mount folder
+      lineinfile:
+        path: "/home/{{ ansible_user }}/.config/gtk-3.0/bookmarks"
+        line: "file://{{ mount_point }} Admin Share"
+        create: yes
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_group }}"
+        mode: '0644'
+    
+    - name: Show bookmarks file content
+      shell: cat /home/{{ ansible_user }}/.config/gtk-3.0/bookmarks
+      register: bookmarks_content
+    
+    - debug:
+        msg: "{{ bookmarks_content.stdout_lines }}"

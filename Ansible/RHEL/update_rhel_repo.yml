@@ -1,0 +1,154 @@
+---
+- name: CORE RHEL OS - Auto Update RHEL8 and RHEL9 Offline Repositories
+  hosts: localhost
+  gather_facts: true
+  become: true
+
+  vars_files:
+    - vault.yml
+
+  vars:
+    sneakernet_url: "https://sslebsatsvr6.northgrum.com/pub/iso/sneakernet/"
+
+    download_dir: "/rhel_updates_repo/iso_downloads"
+
+    mount_root: "/rhel_updates_repo/iso_mounts"
+
+    update_repo_root: "/rhel_updates_repo"
+
+  tasks:
+
+    - name: Ensure required directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ download_dir }}"
+        - "{{ mount_root }}"
+        - "{{ update_repo_root }}"
+
+    - name: Install required packages
+      package:
+        name:
+          - createrepo_c
+          - rsync
+        state: present
+
+    - name: Fetch Sneakernet ISO index page
+      uri:
+        url: "{{ sneakernet_url }}"
+        return_content: true
+        validate_certs: false
+      register: index_page
+
+    - name: Extract ISO filenames
+      set_fact:
+        iso_files: "{{ index_page.content | regex_findall('Full_Latest_RHEL[89]_X86_64_patches_[0-9-]+\\.iso') | unique }}"
+
+    - name: Extract RHEL8 ISO list
+      set_fact:
+        rhel8_isos: "{{ iso_files | select('search','RHEL8') | list }}"
+
+    - name: Extract RHEL9 ISO list
+      set_fact:
+        rhel9_isos: "{{ iso_files | select('search','RHEL9') | list }}"
+
+    - name: Fail if RHEL8 ISO missing
+      fail:
+        msg: "No RHEL8 ISO found"
+      when: rhel8_isos | length == 0
+
+    - name: Fail if RHEL9 ISO missing
+      fail:
+        msg: "No RHEL9 ISO found"
+      when: rhel9_isos | length == 0
+
+    - name: Select latest RHEL8 ISO
+      set_fact:
+        latest_rhel8_iso: "{{ rhel8_isos | sort | last }}"
+
+    - name: Select latest RHEL9 ISO
+      set_fact:
+        latest_rhel9_iso: "{{ rhel9_isos | sort | last }}"
+
+    - name: Display latest ISOs
+      debug:
+        msg:
+          - "Latest RHEL8 ISO: {{ latest_rhel8_iso }}"
+          - "Latest RHEL9 ISO: {{ latest_rhel9_iso }}"
+
+    - name: Create ISO processing list
+      set_fact:
+        iso_list:
+          - "{{ latest_rhel8_iso }}"
+          - "{{ latest_rhel9_iso }}"
+
+    - name: Process latest ISO files
+      include_tasks: process_iso.yml
+      loop: "{{ iso_list }}"
+      loop_control:
+        loop_var: current_iso
+
+
+    - name: Clean DNF cache
+      command: dnf clean all
+      changed_when: false
+      failed_when: false
+
+    - name: Build DNF cache
+      command: dnf makecache
+      changed_when: false
+      failed_when: false
+
+
+    - name: Capture repository status
+      command: dnf repolist -v
+      register: repo_status
+      changed_when: false
+      failed_when: false
+
+
+    - name: Save repository diagnostics
+      copy:
+        dest: /var/log/repo_diagnostics.log
+        content: "{{ repo_status.stdout }}"
+
+
+    - name: Check available updates
+      command: dnf check-update
+      register: update_report
+      changed_when: false
+      failed_when: false
+
+
+    - name: Save patch report
+      copy:
+        dest: /var/log/rhel_patch_report.log
+        content: "{{ update_report.stdout }}"
+
+
+    - name: Find old ISO files
+      find:
+        paths: "{{ download_dir }}"
+        patterns: "*.iso"
+      register: downloaded_isos
+
+
+    - name: Remove old ISOs
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ downloaded_isos.files }}"
+      when:
+        - item.path | basename not in [latest_rhel8_iso, latest_rhel9_iso]
+
+
+    - name: Completion message
+      debug:
+        msg:
+          - "RHEL8 repository updated"
+          - "RHEL9 repository updated"
+          - "Logs:"
+          - "/var/log/repo_diagnostics.log"
+          - "/var/log/rhel_patch_report.log"

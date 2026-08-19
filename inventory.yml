@@ -1,0 +1,21 @@
+all:
+  children:
+    catalyst:
+      hosts:
+        catalyst1:
+          ansible_host: 172.16.101.250          # ← change to the real IP/FQDN
+    nexus:
+      hosts:
+        nexus1:
+          ansible_host: 172.16.201.250          # ← change to the real IP/FQDN
+    firepower:
+      hosts:
+        firepower1:
+          ansible_host: 10.116.105.130        # ← change to the real IP/FQDN
+
+  vars:
+    ansible_user: p06931
+    ansible_password: Password1234
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    ansible_network_os: ios                 # default – will be overridden per group
+    ansible_connection: network_cli
