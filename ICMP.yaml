@@ -1,6 +1,0 @@
-- name: ICMP ping
-  hosts: all
-  gather_facts: no
-  tasks:
-    - name: Run ping
-      ansible.builtin.command: ping -c 2 {{ inventory_hostname }}
